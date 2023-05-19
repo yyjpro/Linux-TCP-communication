@@ -59,13 +59,10 @@ void addsig( int sig )
 
 void timer_handler()
 {
-    // 定时处理任务，实际上就是调用tick()函数
     timer_lst.tick();
-    // 因为一次 alarm 调用只会引起一次SIGALARM 信号，所以我们要重新定时，以不断触发 SIGALARM信号。
     alarm(TIMESLOT);
 }
 
-// 定时器回调函数，它删除非活动连接socket上的注册事件，并关闭之。
 void cb_func( client_data* user_data )
 {
     epoll_ctl( epollfd, EPOLL_CTL_DEL, user_data->sockfd, 0 );
@@ -102,20 +99,18 @@ int main( int argc, char* argv[] ) {
     assert( epollfd != -1 );
     addfd( epollfd, listenfd );
 
-    // 创建管道
     ret = socketpair(PF_UNIX, SOCK_STREAM, 0, pipefd);
     assert( ret != -1 );
     setnonblocking( pipefd[1] );
     addfd( epollfd, pipefd[0] );
 
-    // 设置信号处理函数
     addsig( SIGALRM );
     addsig( SIGTERM );
     bool stop_server = false;
 
     client_data* users = new client_data[FD_LIMIT]; 
     bool timeout = false;
-    alarm(TIMESLOT);  // 定时,5秒后产生SIGALARM信号
+    alarm(TIMESLOT);  
 
     while( !stop_server )
     {
@@ -136,7 +131,6 @@ int main( int argc, char* argv[] ) {
                 users[connfd].address = client_address;
                 users[connfd].sockfd = connfd;
                 
-                // 创建定时器，设置其回调函数与超时时间，然后绑定定时器与用户数据，最后将定时器添加到链表timer_lst中
                 util_timer* timer = new util_timer;
                 timer->user_data = &users[connfd];
                 timer->cb_func = cb_func;
@@ -145,7 +139,6 @@ int main( int argc, char* argv[] ) {
                 users[connfd].timer = timer;
                 timer_lst.add_timer( timer );
             } else if( ( sockfd == pipefd[0] ) && ( events[i].events & EPOLLIN ) ) {
-                // 处理信号
                 int sig;
                 char signals[1024];
                 ret = recv( pipefd[0], signals, sizeof( signals ), 0 );
@@ -158,8 +151,6 @@ int main( int argc, char* argv[] ) {
                         switch( signals[i] )  {
                             case SIGALRM:
                             {
-                                // 用timeout变量标记有定时任务需要处理，但不立即处理定时任务
-                                // 这是因为定时任务的优先级不是很高，我们优先处理其他更重要的任务。
                                 timeout = true;
                                 break;
                             }
@@ -179,7 +170,6 @@ int main( int argc, char* argv[] ) {
                 util_timer* timer = users[sockfd].timer;
                 if( ret < 0 )
                 {
-                    // 如果发生读错误，则关闭连接，并移除其对应的定时器
                     if( errno != EAGAIN )
                     {
                         cb_func( &users[sockfd] );
@@ -191,7 +181,6 @@ int main( int argc, char* argv[] ) {
                 }
                 else if( ret == 0 )
                 {
-                    // 如果对方已经关闭连接，则我们也关闭连接，并移除对应的定时器。
                     cb_func( &users[sockfd] );
                     if( timer )
                     {
@@ -200,7 +189,6 @@ int main( int argc, char* argv[] ) {
                 }
                 else
                 {
-                    // 如果某个客户端上有数据可读，则我们要调整该连接对应的定时器，以延迟该连接被关闭的时间。
                     if( timer ) {
                         time_t cur = time( NULL );
                         timer->expire = cur + 3 * TIMESLOT;
@@ -212,7 +200,6 @@ int main( int argc, char* argv[] ) {
            
         }
 
-        // 最后处理定时事件，因为I/O事件有更高的优先级。当然，这样做将导致定时任务不能精准的按照预定的时间执行。
         if( timeout ) {
             timer_handler();
             timeout = false;
